@@ -227,10 +227,13 @@ export default function CreatorBoard({ onBack, onSelectTemplate }) {
 
   const handleForge = () => {
     if (!selectedId) return;
+    if (selectedId !== 'dungeon') {
+      const tmpl = ROOM_TEMPLATES.find((t) => t.id === selectedId);
+      alert(`${tmpl ? tmpl.title : 'This layout'} is currently under construction and coming soon! Please select the Dungeon Vault template to forge.`);
+      return;
+    }
     if (onSelectTemplate) {
-      onSelectTemplate(selectedId);
-    } else {
-      alert(`Forging Room Template: ${selectedId.toUpperCase()}`);
+      onSelectTemplate('dungeon');
     }
   };
 

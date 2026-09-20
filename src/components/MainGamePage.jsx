@@ -1,15 +1,18 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import CreatorBoard from './CreatorBoard';
+import PlayerEscapeView from './PlayerEscapeView';
+import { getRoomByCode, getRandomCommunityRoom, getLeaderboardRuns } from '../utils/communityRoomPool';
 
-const RoomInspector = lazy(() => import('./RoomInspector'));
+const DungeonVaultEditor = lazy(() => import('./DungeonVaultEditor'));
 
 export default function MainGamePage() {
   // Navigation & Tour States
   const [showStory, setShowStory] = useState(false); // Default false so it doesn't overlap tear animation
   const [tourIndex, setTourIndex] = useState(-1); // -1: inactive, 0: Top-Right, 1: Top-Left, 2: Player, 3: Creator
   const [activeModal, setActiveModal] = useState(null); // 'player' | 'creator' | 'login' | 'settings' | 'achievements' | 'leaderboard'
-  const [inspectingTemplate, setInspectingTemplate] = useState(null); // 'dungeon' | etc.
+  const [forgingTemplate, setForgingTemplate] = useState(null);
+  const [playingRoom, setPlayingRoom] = useState(null); // 'dungeon' | etc.
 
   // Initial Onboarding Story Trigger: Wait 3.0s (paper tear) + 0.5s (pause) = 3.5s total after mount
   useEffect(() => {
@@ -362,39 +365,67 @@ export default function MainGamePage() {
       {/* ------------------------------------------ */}
       {/* CREATOR BOARD FULL SCREEN SCREEN */}
       {/* ------------------------------------------ */}
-      {activeModal === 'creator' && !inspectingTemplate && (
+      {activeModal === 'creator' && !forgingTemplate && (
         <CreatorBoard
           onBack={() => setActiveModal(null)}
           onSelectTemplate={(templateId) => {
-            setInspectingTemplate(templateId);
+            setForgingTemplate(templateId);
             setActiveModal(null);
           }}
         />
       )}
 
       {/* ------------------------------------------ */}
-      {/* 3D ROOM INSPECTOR VIEW (FORGING STAGE 2) */}
       {/* ------------------------------------------ */}
-      {inspectingTemplate && (
+        {/* 3D PLAYER ESCAPE MODE VIEWPORT */}
+        {/* ------------------------------------------ */}
+        {playingRoom && (
+          <Suspense
+            fallback={
+              <div className="fixed inset-0 z-50 bg-slate-950 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-3 bg-slate-900/90 border border-cyan-500/30 p-6 rounded-2xl backdrop-blur-md shadow-2xl">
+                  <div className="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm font-bold text-cyan-300 tracking-wider uppercase font-mono">
+                    Loading Escape Vault...
+                  </span>
+                </div>
+              </div>
+            }
+          >
+            <PlayerEscapeView
+              room={playingRoom}
+              onExit={() => setPlayingRoom(null)}
+              onPlayAnother={() => {
+                const next = getRandomCommunityRoom(playingRoom.room_code);
+                setPlayingRoom(next);
+              }}
+            />
+          </Suspense>
+        )}
+
+        {/* ------------------------------------------ */}
+        {/* MULTI-ROOM DUNGEON VAULT 3D EDITOR */}
+      {/* ------------------------------------------ */}
+      {forgingTemplate && (
         <Suspense
           fallback={
             <div className="fixed inset-0 z-50 bg-slate-950 flex items-center justify-center">
-              <div className="flex flex-col items-center gap-3 bg-slate-900/90 border border-cyan-500/30 p-6 rounded-2xl backdrop-blur-md shadow-2xl">
-                <div className="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm font-bold text-cyan-300 tracking-wider uppercase font-mono">
-                  Initializing 3D Inspector Studio...
+              <div className="flex flex-col items-center gap-3 bg-slate-900/90 border border-amber-500/30 p-6 rounded-2xl backdrop-blur-md shadow-2xl">
+                <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-bold text-amber-300 tracking-wider uppercase font-mono">
+                  Loading Multi-Room Dungeon Vault 3D...
                 </span>
               </div>
             </div>
           }
         >
-          <RoomInspector
+          <DungeonVaultEditor
             onBack={() => {
-              setInspectingTemplate(null);
+              setForgingTemplate(null);
               setActiveModal('creator');
             }}
-            onStartForging={(registry) => {
-              alert(`Transitioning to Stage 3 Object Placement Editor with ${registry.length} registered 3D props!`);
+            onConfirmLayout={(placedObjects) => {
+              alert(`Layout Confirmed with ${placedObjects.length} active 3D props! Transitioning to Stage 4 Logic Builder...`);
             }}
           />
         </Suspense>
@@ -484,9 +515,24 @@ export default function MainGamePage() {
                   )}
 
                   <button
-                    onClick={() => {
-                      alert(playerMode === 'community' ? 'Loading Community Rooms...' : `Joining room ${roomCode || 'FORGE-101'}...`);
-                      setActiveModal(null);
+                    onClick={async () => {
+                      if (playerMode === 'code') {
+                        if (!roomCode.trim()) {
+                          alert('Please enter a room code (e.g. FORGE-DEMO or a code from your friend)!');
+                          return;
+                        }
+                        const found = await getRoomByCode(roomCode);
+                        if (!found) {
+                          alert(`Room code "${roomCode}" was not found! Please check the code or try "Play Community Room".`);
+                          return;
+                        }
+                        setPlayingRoom(found);
+                        setActiveModal(null);
+                      } else {
+                        const commRoom = await getRandomCommunityRoom();
+                        setPlayingRoom(commRoom);
+                        setActiveModal(null);
+                      }
                     }}
                     className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black py-3.5 rounded-xl shadow-[0_0_20px_rgba(34,211,238,0.5)] transition-all cursor-pointer text-lg tracking-wider"
                   >
