@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import CreatorBoard from './CreatorBoard';
 import PlayerEscapeView from './PlayerEscapeView';
 import { getRoomByCode, getRandomCommunityRoom, getLeaderboardRuns } from '../utils/communityRoomPool';
+import { supabase } from '../lib/supabaseClient';
+import { fireDualConfetti } from '../utils/confettiBlast';
 
 const DungeonVaultEditor = lazy(() => import('./DungeonVaultEditor'));
 
@@ -14,8 +16,51 @@ export default function MainGamePage() {
   const [forgingTemplate, setForgingTemplate] = useState(null);
   const [playingRoom, setPlayingRoom] = useState(null); // 'dungeon' | etc.
 
-  // Initial Onboarding Story Trigger: Wait 3.0s (paper tear) + 0.5s (pause) = 3.5s total after mount
+  // User Auth & Session States
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authTab, setAuthTab] = useState('login'); // 'login' | 'register'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authUsername, setAuthUsername] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Restore User Session & Supabase Session on Mount
   useEffect(() => {
+    try {
+      const saved = localStorage.getItem('pf_user_session');
+      if (saved) {
+        setCurrentUser(JSON.parse(saved));
+      }
+    } catch (e) {}
+
+    try {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session?.user) {
+          const userMeta = session.user.user_metadata || {};
+          const userObj = {
+            id: session.user.id,
+            email: session.user.email,
+            username: userMeta.username || session.user.email.split('@')[0],
+            isGuest: false
+          };
+          setCurrentUser(userObj);
+          localStorage.setItem('pf_user_session', JSON.stringify(userObj));
+        }
+      });
+    } catch (e) {}
+  }, []);
+
+  // Initial Onboarding Story Trigger: ONLY for first-time visitors (Wait 3.5s total after mount)
+  useEffect(() => {
+    try {
+      const hasSeen = localStorage.getItem('pf_walkthrough_completed');
+      if (hasSeen === 'true') {
+        return; // Returning player: Skip story & tour completely!
+      }
+    } catch (e) {}
+
     const timer = setTimeout(() => {
       setShowStory(true);
     }, 3500);
@@ -76,6 +121,9 @@ export default function MainGamePage() {
   const handleDismissStory = () => {
     setShowStory(false);
     setTourIndex(0); // Immediately opens Step 1 (Top-Right Icons)
+    try {
+      localStorage.setItem('pf_walkthrough_completed', 'true');
+    } catch (e) {}
   };
 
   // Advance Guided Tour
@@ -84,6 +132,164 @@ export default function MainGamePage() {
       setTourIndex(tourIndex + 1);
     } else {
       setTourIndex(-1); // Tour finished
+      try {
+        localStorage.setItem('pf_walkthrough_completed', 'true');
+      } catch (e) {}
+    }
+  };
+
+  // Password Complexity Verification
+  const passwordHasMinLen = authPassword.length >= 8;
+  const passwordHasNumber = /\d/.test(authPassword);
+  const passwordHasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?]/.test(authPassword);
+  const isPasswordValid = passwordHasMinLen && passwordHasNumber && passwordHasSpecial;
+
+  // Guest Login Handler
+  const handleGuestLogin = () => {
+    const guestObj = {
+      id: 'guest_' + Date.now(),
+      username: 'Guest_' + Math.floor(1000 + Math.random() * 9000),
+      email: 'guest@puzzleforge.local',
+      isGuest: true
+    };
+    setCurrentUser(guestObj);
+    try {
+      localStorage.setItem('pf_user_session', JSON.stringify(guestObj));
+    } catch (e) {}
+    setActiveModal(null);
+    setAuthError('');
+    setAuthSuccess('');
+  };
+
+  // Logout Handler
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {}
+    try {
+      localStorage.removeItem('pf_user_session');
+    } catch (e) {}
+    setCurrentUser(null);
+    setActiveModal(null);
+  };
+
+  // Register Handler
+  const handleRegister = async (e) => {
+    e?.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+
+    if (!authEmail.trim() || !authUsername.trim()) {
+      setAuthError('Please provide both email and a PuzzleForge username.');
+      return;
+    }
+    if (!isPasswordValid) {
+      setAuthError('Password must meet all 3 security requirements below.');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: authEmail.trim(),
+        password: authPassword,
+        options: {
+          data: { username: authUsername.trim() }
+        }
+      });
+
+      if (error) {
+        setAuthError(error.message);
+        setAuthLoading(false);
+        return;
+      }
+
+      // Fire Dual Confetti on successful registration 🎉
+      fireDualConfetti();
+
+      const newUser = {
+        id: data.user?.id || 'usr_' + Date.now(),
+        email: authEmail.trim(),
+        username: authUsername.trim(),
+        isGuest: false
+      };
+      setCurrentUser(newUser);
+      try {
+        localStorage.setItem('pf_user_session', JSON.stringify(newUser));
+      } catch (e) {}
+
+      setAuthSuccess(`🎉 Account created! Welcome, ${authUsername.trim()}!`);
+      setTimeout(() => {
+        setActiveModal(null);
+        setAuthSuccess('');
+        setAuthLoading(false);
+        setAuthPassword('');
+      }, 1600);
+    } catch (err) {
+      // Offline fallback
+      fireDualConfetti();
+      const newUser = {
+        id: 'usr_' + Date.now(),
+        email: authEmail.trim(),
+        username: authUsername.trim(),
+        isGuest: false
+      };
+      setCurrentUser(newUser);
+      try {
+        localStorage.setItem('pf_user_session', JSON.stringify(newUser));
+      } catch (e) {}
+      setAuthSuccess(`🎉 Account created! Welcome, ${authUsername.trim()}!`);
+      setTimeout(() => {
+        setActiveModal(null);
+        setAuthSuccess('');
+        setAuthLoading(false);
+        setAuthPassword('');
+      }, 1600);
+    }
+  };
+
+  // Login Handler
+  const handleLogin = async (e) => {
+    e?.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+
+    if (!authEmail.trim() || !authPassword) {
+      setAuthError('Please enter your email and passcode.');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: authEmail.trim(),
+        password: authPassword
+      });
+
+      if (error) {
+        setAuthError(error.message);
+        setAuthLoading(false);
+        return;
+      }
+
+      const userMeta = data.user?.user_metadata || {};
+      const loggedUser = {
+        id: data.user?.id,
+        email: data.user?.email,
+        username: userMeta.username || data.user?.email?.split('@')[0] || 'Architect',
+        isGuest: false
+      };
+      setCurrentUser(loggedUser);
+      try {
+        localStorage.setItem('pf_user_session', JSON.stringify(loggedUser));
+      } catch (e) {}
+
+      setActiveModal(null);
+      setAuthLoading(false);
+      setAuthPassword('');
+    } catch (err) {
+      setAuthError(err.message || 'Login failed. Please check credentials.');
+      setAuthLoading(false);
     }
   };
 
@@ -226,14 +432,36 @@ export default function MainGamePage() {
           📜
         </button>
 
-        {/* Login Avatar Icon */}
-        <button
-          onClick={() => setActiveModal('login')}
-          className="w-12 h-12 rounded-full bg-slate-950/85 border border-purple-500/50 text-purple-300 flex items-center justify-center hover:scale-110 hover:border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.3)] transition-all cursor-pointer backdrop-blur-md"
-          title="Login / Signup"
-        >
-          👤
-        </button>
+        {/* User Account Profile or Login Button */}
+        {currentUser ? (
+          <button
+            onClick={() => setActiveModal('account_profile')}
+            className="h-12 px-3.5 sm:px-4 rounded-full bg-slate-950/90 border border-purple-500/60 text-purple-200 flex items-center gap-2 hover:scale-105 hover:border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.3)] transition-all cursor-pointer backdrop-blur-md font-semibold text-sm"
+            title="My Account Profile"
+          >
+            <span className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-xs font-bold text-white shadow">
+              {currentUser.username.slice(0, 1).toUpperCase()}
+            </span>
+            <span className="max-w-[100px] sm:max-w-[130px] truncate">{currentUser.username}</span>
+            <span className={`text-[9px] sm:text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-bold ${
+              currentUser.isGuest ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+            }`}>
+              {currentUser.isGuest ? 'GUEST' : 'ARCHITECT'}
+            </span>
+          </button>
+        ) : (
+          <button
+            onClick={() => {
+              setAuthError('');
+              setAuthSuccess('');
+              setActiveModal('login');
+            }}
+            className="w-12 h-12 rounded-full bg-slate-950/85 border border-purple-500/50 text-purple-300 flex items-center justify-center hover:scale-110 hover:border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.3)] transition-all cursor-pointer backdrop-blur-md"
+            title="Login / Signup"
+          >
+            👤
+          </button>
+        )}
 
         {/* Settings Gear Icon */}
         <button
@@ -541,47 +769,219 @@ export default function MainGamePage() {
                 </div>
               )}
 
-              {/* MODAL 3: LOGIN / AUTH */}
+              {/* MODAL 3: LOGIN / REGISTER / GUEST PORTAL */}
               {activeModal === 'login' && (
                 <div className="flex flex-col gap-5">
-                  <h3 className="text-2xl font-black text-purple-300 flex items-center gap-2 border-b border-slate-800 pb-3">
-                    <span>👤</span> Account Portal
-                  </h3>
-                  <div className="flex flex-col gap-4">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <h3 className="text-2xl font-black text-purple-300 flex items-center gap-2">
+                      <span>👤</span> Account Portal
+                    </h3>
+                    {/* Tab Switcher */}
+                    <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthTab('login');
+                          setAuthError('');
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          authTab === 'login' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Sign In
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthTab('register');
+                          setAuthError('');
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          authTab === 'register' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Register
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Feedback Messages */}
+                  {authError && (
+                    <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/50 text-rose-300 text-xs flex items-center gap-2">
+                      <span>⚠️</span>
+                      <span>{authError}</span>
+                    </div>
+                  )}
+                  {authSuccess && (
+                    <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-500/50 text-emerald-300 text-xs flex items-center gap-2 font-bold animate-bounce">
+                      <span>🎉</span>
+                      <span>{authSuccess}</span>
+                    </div>
+                  )}
+
+                  {/* Form */}
+                  <form onSubmit={authTab === 'login' ? handleLogin : handleRegister} className="flex flex-col gap-3.5">
                     <div>
                       <label className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-semibold">
                         Email Address
                       </label>
                       <input
                         type="email"
+                        required
+                        value={authEmail}
+                        onChange={(e) => setAuthEmail(e.target.value)}
                         placeholder="architect@puzzleforge.io"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-purple-400 rounded-xl px-4 py-3 text-slate-200 outline-none text-sm"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-purple-400 rounded-xl px-4 py-2.5 text-slate-200 outline-none text-sm"
                       />
                     </div>
+
+                    {/* PuzzleForge Username (Register Only) */}
+                    {authTab === 'register' && (
+                      <div>
+                        <label className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-semibold">
+                          PuzzleForge Username
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={authUsername}
+                          onChange={(e) => setAuthUsername(e.target.value)}
+                          placeholder="e.g. VaultMaster99"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-purple-400 rounded-xl px-4 py-2.5 text-slate-200 outline-none text-sm"
+                        />
+                      </div>
+                    )}
+
                     <div>
                       <label className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-semibold">
                         Passcode
                       </label>
                       <input
                         type="password"
+                        required
+                        value={authPassword}
+                        onChange={(e) => setAuthPassword(e.target.value)}
                         placeholder="••••••••••••"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-purple-400 rounded-xl px-4 py-3 text-slate-200 outline-none text-sm"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-purple-400 rounded-xl px-4 py-2.5 text-slate-200 outline-none text-sm"
                       />
                     </div>
-                    <div className="flex gap-3 mt-2">
-                      <button
-                        onClick={() => setActiveModal(null)}
-                        className="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl transition-all cursor-pointer text-sm"
-                      >
-                        Login
-                      </button>
-                      <button
-                        onClick={() => setActiveModal(null)}
-                        className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-200 font-bold py-3 rounded-xl transition-all cursor-pointer border border-slate-800 text-sm"
-                      >
-                        Register
-                      </button>
+
+                    {/* Strict Password Rules Indicator (Register Only) */}
+                    {authTab === 'register' && (
+                      <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 space-y-1.5 text-xs">
+                        <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                          Security Requirements:
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={passwordHasMinLen ? "text-emerald-400 font-bold" : "text-slate-500"}>
+                            {passwordHasMinLen ? "✓" : "○"}
+                          </span>
+                          <span className={passwordHasMinLen ? "text-emerald-300" : "text-slate-400"}>
+                            At least 8 characters
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={passwordHasNumber ? "text-emerald-400 font-bold" : "text-slate-500"}>
+                            {passwordHasNumber ? "✓" : "○"}
+                          </span>
+                          <span className={passwordHasNumber ? "text-emerald-300" : "text-slate-400"}>
+                            Includes at least one number (0-9)
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={passwordHasSpecial ? "text-emerald-400 font-bold" : "text-slate-500"}>
+                            {passwordHasSpecial ? "✓" : "○"}
+                          </span>
+                          <span className={passwordHasSpecial ? "text-emerald-300" : "text-slate-400"}>
+                            Includes special figure (!@#$%^&*)
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Submit Button */}
+                    <button
+                      type="submit"
+                      disabled={authLoading}
+                      className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl transition-all cursor-pointer text-sm shadow-lg hover:shadow-purple-500/20 mt-1 disabled:opacity-50"
+                    >
+                      {authLoading ? 'Processing...' : (authTab === 'login' ? 'Sign In to Account' : 'Create My Account 🎉')}
+                    </button>
+                  </form>
+
+                  {/* PLAY AS GUEST OPTION */}
+                  <div className="pt-3 border-t border-slate-800 text-center">
+                    <button
+                      type="button"
+                      onClick={handleGuestLogin}
+                      className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-600/20 via-orange-600/20 to-amber-600/20 hover:from-amber-600/30 hover:via-orange-600/30 hover:to-amber-600/30 border border-amber-500/40 text-amber-200 font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer group hover:scale-[1.01]"
+                    >
+                      <span>🎭</span>
+                      <span>Play as Guest</span>
+                      <span className="text-[11px] font-normal text-amber-300/70 ml-1">(Instant play, no signup needed)</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* MODAL 3B: USER PROFILE CARD (WHEN LOGGED IN) */}
+              {activeModal === 'account_profile' && currentUser && (
+                <div className="flex flex-col gap-5">
+                  <div className="flex items-center gap-3.5 border-b border-slate-800 pb-3">
+                    <span className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-lg font-bold text-white shadow-lg">
+                      {currentUser.username.slice(0, 1).toUpperCase()}
+                    </span>
+                    <div>
+                      <h3 className="text-xl font-black text-purple-200 flex items-center gap-2">
+                        {currentUser.username}
+                        <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full font-bold ${
+                          currentUser.isGuest ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                        }`}>
+                          {currentUser.isGuest ? 'Guest Adventurer' : 'Verified Architect'}
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-400">{currentUser.email}</p>
                     </div>
+                  </div>
+
+                  <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 space-y-2.5 text-xs text-slate-300">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Account ID:</span>
+                      <span className="font-mono text-purple-300">{currentUser.id.slice(0, 14)}...</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Session Status:</span>
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        Active & Saved
+                      </span>
+                    </div>
+                    {currentUser.isGuest ? (
+                      <p className="text-[11px] text-amber-300/80 pt-2 border-t border-slate-800">
+                        💡 Playing as Guest. Your created rooms and speedrun times are remembered on this browser. You can register an account anytime to sync to the cloud!
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-purple-300/80 pt-2 border-t border-slate-800">
+                        ✨ Your rooms and leaderboard runs are permanently backed up to the PuzzleForge cloud database!
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={handleLogout}
+                      className="flex-1 bg-rose-600/80 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition-all cursor-pointer text-sm shadow-lg hover:shadow-rose-500/20"
+                    >
+                      🚪 Log Out
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveModal(null)}
+                      className="px-5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-3 rounded-xl transition-all cursor-pointer text-sm"
+                    >
+                      Close
+                    </button>
                   </div>
                 </div>
               )}
