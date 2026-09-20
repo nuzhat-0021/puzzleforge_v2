@@ -30,13 +30,17 @@ function DungeonVaultInner({ onBack }) {
     setPublishOpen(true);
   };
 
+  const isAnyModalOpen = publishOpen || photoOpen || galleryOpen;
+
   return (
     <div className="fixed inset-0 w-screen h-screen overflow-hidden bg-gradient-to-br from-stone-950 via-zinc-950 to-stone-900 font-sans select-none z-50">
       {/* Top Navbar */}
       <TopNavbar onPublish={handlePublish} onBack={onBack} />
 
       {/* 3D Interactive Cozy Dungeon Canvas with Cutaway Vault View */}
-      <RoomCanvas canvasRef={canvasRef} />
+      <div className={`w-full h-full transition-all duration-300 ${isAnyModalOpen ? 'pointer-events-none filter blur-sm brightness-75' : ''}`}>
+        <RoomCanvas canvasRef={canvasRef} />
+      </div>
 
       {/* Poki-Style Right-Hand Category & Prop Catalog Shelf */}
       <FurnitureCatalog />

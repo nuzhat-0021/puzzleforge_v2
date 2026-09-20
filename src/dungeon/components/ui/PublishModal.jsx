@@ -19,7 +19,11 @@ export function PublishModal({ isOpen, onClose, publishedRoom }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm select-none animate-in fade-in zoom-in-95 duration-200">
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md select-none pointer-events-auto animate-in fade-in zoom-in-95 duration-200"
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       {/* Stone Tablet Outer Frame */}
       <div className="relative w-full max-w-[440px] bg-gradient-to-b from-[#7a889b] via-[#637082] to-[#4e5a69] p-3.5 sm:p-4 rounded-[32px] shadow-[0_25px_60px_rgba(0,0,0,0.8),inset_0_2px_4px_rgba(255,255,255,0.4),inset_0_-4px_6px_rgba(0,0,0,0.5)] border-2 border-[#3d4652]">
         

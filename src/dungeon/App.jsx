@@ -39,7 +39,9 @@ function DungeonVaultApp() {
       <TopNavbar onPublish={handlePublish} />
 
       {/* 3D Interactive Cozy Dungeon Canvas with Cutaway Vault View */}
-      <RoomCanvas canvasRef={canvasRef} />
+      <div className={`w-full h-full transition-all duration-300 ${publishOpen || photoOpen || galleryOpen ? 'pointer-events-none filter blur-sm brightness-75' : ''}`}>
+        <RoomCanvas canvasRef={canvasRef} />
+      </div>
 
       {/* Poki-Style Right-Hand Category & Prop Catalog Shelf */}
       <FurnitureCatalog />
