@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, Suspense } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls, ContactShadows } from '@react-three/drei';
+import React, { useState, useEffect, useRef, useMemo, Suspense } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import {
   ArrowLeft,
@@ -11,38 +11,37 @@ import {
   Sparkles,
   Trophy,
   X,
-  Boxes,
-  HelpCircle
+  Compass,
+  Hand
 } from 'lucide-react';
-import { DungeonModel } from '../dungeon/components/3d/DungeonModel';
 import { audioSystem } from '../dungeon/utils/audioSystem';
 import { submitRoomRun } from '../utils/communityRoomPool';
 
 // ----------------------------------------------------
-// Error Boundary to prevent any white screen crashes
+// Error Boundary to prevent any 3D scene crashes
 // ----------------------------------------------------
 class EscapeErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false };
   }
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
+  static getDerivedStateFromError() {
+    return { hasError: true };
   }
-  componentDidCatch(error, errorInfo) {
-    console.error('Escape Room 3D Error:', error, errorInfo);
+  componentDidCatch(error, info) {
+    console.error('PlayerEscapeView 3D Error:', error, info);
   }
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center w-full h-full bg-stone-950 text-amber-200 p-8 text-center">
-          <h2 className="text-xl font-bold mb-2">Notice: 3D Scene Loading Fallback</h2>
+        <div className="flex flex-col items-center justify-center w-full h-full bg-stone-950 text-amber-200 p-8 text-center select-none">
+          <h2 className="text-xl font-bold mb-2">Notice: Re-initializing Escape Chamber</h2>
           <p className="text-xs text-stone-400 max-w-md mb-4">
-            A graphic element could not be initialized directly. Click below to return to the hub.
+            A graphic component needed to reset. Click below to return to the hub.
           </p>
           <button
             onClick={this.props.onExit}
-            className="px-6 py-2 bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold rounded-xl text-sm"
+            className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold rounded-xl text-sm"
           >
             Return to Hub
           </button>
@@ -54,89 +53,225 @@ class EscapeErrorBoundary extends React.Component {
 }
 
 // ----------------------------------------------------
-// Standalone 3D Dungeon Chamber for Player Mode
-// (Never calls useRoom, 100% crash-proof)
+// Authentic KayKit Modular 3D Components
 // ----------------------------------------------------
-function PlayerChamber({ chamber }) {
+function ModularFloorTile({ position }) {
+  const { scene } = useGLTF('/models/dungeon/floor_tile_large.gltf');
+  const clone = useMemo(() => {
+    const c = scene.clone(true);
+    c.traverse((child) => {
+      if (child.isMesh) {
+        child.receiveShadow = true;
+        if (child.material) {
+          child.material = child.material.clone();
+          child.material.roughness = 0.75;
+          child.material.metalness = 0.1;
+        }
+      }
+    });
+    return c;
+  }, [scene]);
+
+  return <primitive object={clone} position={position} scale={[1, 1, 1]} />;
+}
+
+function ModularWall({ position, rotation = [0, 0, 0] }) {
+  const { scene } = useGLTF('/models/dungeon/wall.gltf');
+  const clone = useMemo(() => {
+    const c = scene.clone(true);
+    c.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          child.material = child.material.clone();
+          child.material.roughness = 0.85;
+        }
+      }
+    });
+    return c;
+  }, [scene]);
+
+  return <primitive object={clone} position={position} rotation={rotation} scale={[1, 1, 1]} />;
+}
+
+function ModularColumn({ position }) {
+  const { scene } = useGLTF('/models/dungeon/pillar.gltf');
+  const clone = useMemo(() => {
+    const c = scene.clone(true);
+    c.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    return c;
+  }, [scene]);
+
+  return <primitive object={clone} position={position} scale={[1, 1, 1]} />;
+}
+
+// ----------------------------------------------------
+// Authentic Connected Chamber (NO divider walls between connected rooms!)
+// ----------------------------------------------------
+function ConnectedDungeonChamber({ chamber, allChambers }) {
   const x = chamber.x || 0;
   const z = chamber.z || 0;
   const width = chamber.width || 6;
-  const depth = chamber.depth || 6;
-  const height = 3;
+  const depth = chamber.depth || chamber.length || 6;
+
+  // Smart edge detection: checks if another chamber touches this edge
+  const hasLeft = allChambers.some(
+    (c) =>
+      c !== chamber &&
+      ((c.gridX !== undefined && c.gridX === chamber.gridX - 1 && c.gridZ === chamber.gridZ) ||
+        (Math.abs((c.x || 0) - (x - width)) < 1.5 && Math.abs((c.z || 0) - z) < 1.5))
+  );
+  const hasRight = allChambers.some(
+    (c) =>
+      c !== chamber &&
+      ((c.gridX !== undefined && c.gridX === chamber.gridX + 1 && c.gridZ === chamber.gridZ) ||
+        (Math.abs((c.x || 0) - (x + width)) < 1.5 && Math.abs((c.z || 0) - z) < 1.5))
+  );
+  const hasTop = allChambers.some(
+    (c) =>
+      c !== chamber &&
+      ((c.gridX !== undefined && c.gridX === chamber.gridX && c.gridZ === chamber.gridZ - 1) ||
+        (Math.abs((c.z || 0) - (z - depth)) < 1.5 && Math.abs((c.x || 0) - x) < 1.5))
+  );
+  const hasBottom = allChambers.some(
+    (c) =>
+      c !== chamber &&
+      ((c.gridX !== undefined && c.gridX === chamber.gridX && c.gridZ === chamber.gridZ + 1) ||
+        (Math.abs((c.z || 0) - (z + depth)) < 1.5 && Math.abs((c.x || 0) - x) < 1.5))
+  );
+
+  // 3x3 grid of 2x2m modular stone floor slabs
+  const tileOffsets = [-2, 0, 2];
 
   return (
     <group position={[x, 0, z]}>
-      {/* Stone Floor Slab */}
-      <mesh position={[0, -0.05, 0]} receiveShadow>
-        <boxGeometry args={[width, 0.1, depth]} />
-        <meshStandardMaterial color="#292524" roughness={0.85} metalness={0.1} />
-      </mesh>
+      {/* 1. Authentic Textured Stone Floor Slabs */}
+      <group position={[0, 0, 0]}>
+        {tileOffsets.map((tx) =>
+          tileOffsets.map((tz) => (
+            <Suspense
+              key={`floor-${tx}-${tz}`}
+              fallback={
+                <mesh position={[tx, 0.05, tz]}>
+                  <boxGeometry args={[2, 0.1, 2]} />
+                  <meshStandardMaterial color="#292524" roughness={0.8} />
+                </mesh>
+              }
+            >
+              <ModularFloorTile position={[tx, 0, tz]} />
+            </Suspense>
+          ))
+        )}
+      </group>
 
-      {/* Decorative Floor Grid Inlay */}
-      <gridHelper
-        args={[width, Math.round(width / 2), '#78716c', '#44403c']}
-        position={[0, 0.01, 0]}
-      />
-
-      {/* Back Wall (Cutaway roof & front for isometric visibility) */}
-      <mesh position={[0, height / 2, -depth / 2]} receiveShadow castShadow>
-        <boxGeometry args={[width, height, 0.3]} />
+      {/* Stone Foundation Slab Bed */}
+      <mesh position={[0, -0.08, 0]} receiveShadow>
+        <boxGeometry args={[width + 0.1, 0.16, depth + 0.1]} />
         <meshStandardMaterial color="#1c1917" roughness={0.9} />
       </mesh>
 
-      {/* Left Wall */}
-      <mesh position={[-width / 2, height / 2, 0]} receiveShadow castShadow>
-        <boxGeometry args={[0.3, height, depth]} />
-        <meshStandardMaterial color="#1c1917" roughness={0.9} />
-      </mesh>
+      {/* 2. Top / North Outer Wall (ONLY if no room above) */}
+      {!hasTop && (
+        <group position={[0, 0, -depth / 2]}>
+          {tileOffsets.map((wx) => (
+            <Suspense key={`wall-top-${wx}`} fallback={null}>
+              <ModularWall position={[wx, 0, 0]} />
+            </Suspense>
+          ))}
+          <Suspense fallback={null}>
+            <ModularColumn position={[-width / 2 + 0.2, 0, 0.2]} />
+            <ModularColumn position={[width / 2 - 0.2, 0, 0.2]} />
+          </Suspense>
+          {/* Torch Light */}
+          <pointLight position={[0, 2.2, 0.6]} intensity={1.5} color="#f59e0b" distance={8} />
+        </group>
+      )}
 
-      {/* Right Wall */}
-      <mesh position={[width / 2, height / 2, 0]} receiveShadow castShadow>
-        <boxGeometry args={[0.3, height, depth]} />
-        <meshStandardMaterial color="#1c1917" roughness={0.9} />
-      </mesh>
+      {/* 3. Left / West Outer Wall (ONLY if no room to the left) */}
+      {!hasLeft && (
+        <group position={[-width / 2, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+          {tileOffsets.map((wz) => (
+            <Suspense key={`wall-left-${wz}`} fallback={null}>
+              <ModularWall position={[wz, 0, 0]} />
+            </Suspense>
+          ))}
+          <pointLight position={[0.6, 2.2, 0]} intensity={1.5} color="#f97316" distance={8} />
+        </group>
+      )}
 
-      {/* Corner Wall Pillars */}
-      <mesh position={[-width / 2 + 0.2, height / 2, -depth / 2 + 0.2]}>
-        <boxGeometry args={[0.5, height + 0.2, 0.5]} />
-        <meshStandardMaterial color="#0c0a09" roughness={0.95} />
-      </mesh>
-      <mesh position={[width / 2 - 0.2, height / 2, -depth / 2 + 0.2]}>
-        <boxGeometry args={[0.5, height + 0.2, 0.5]} />
-        <meshStandardMaterial color="#0c0a09" roughness={0.95} />
-      </mesh>
+      {/* 4. Right / East Outer Wall (ONLY if no room to the right) */}
+      {!hasRight && (
+        <group position={[width / 2, 0, 0]} rotation={[0, -Math.PI / 2, 0]}>
+          {tileOffsets.map((wz) => (
+            <Suspense key={`wall-right-${wz}`} fallback={null}>
+              <ModularWall position={[wz, 0, 0]} />
+            </Suspense>
+          ))}
+          <pointLight position={[-0.6, 2.2, 0]} intensity={1.5} color="#f97316" distance={8} />
+        </group>
+      )}
 
-      {/* Warm Wall Torch Pointlights */}
-      <pointLight position={[0, 2.2, -depth / 2 + 0.5]} intensity={1.8} color="#f59e0b" distance={8} />
-      <pointLight position={[-width / 2 + 0.5, 2.2, 0]} intensity={1.4} color="#f97316" distance={7} />
-      <pointLight position={[width / 2 - 0.5, 2.2, 0]} intensity={1.4} color="#f97316" distance={7} />
+      {/* 5. Bottom / South Outer Wall (ONLY if no room below) */}
+      {!hasBottom && (
+        <group position={[0, 0, depth / 2]} rotation={[0, Math.PI, 0]}>
+          {tileOffsets.map((wx) => (
+            <Suspense key={`wall-bottom-${wx}`} fallback={null}>
+              <ModularWall position={[wx, 0, 0]} />
+            </Suspense>
+          ))}
+        </group>
+      )}
     </group>
   );
 }
 
 // ----------------------------------------------------
-// 3D Placed Prop in Player Mode
+// Safe Model Loader with Procedural Fallbacks
 // ----------------------------------------------------
-function PlayerProp({ item, onInteract, isOpened }) {
-  const [hovered, setHovered] = useState(false);
+function SafeDungeonPropModel({ modelPath, scale = 1.2 }) {
+  // Normalize old .glb paths to real .gltf
+  let cleanPath = modelPath || '/models/dungeon/chest.gltf';
+  if (cleanPath.endsWith('.glb')) {
+    cleanPath = cleanPath.replace('.glb', '.gltf');
+    if (cleanPath.includes('door-gate') || cleanPath.includes('door_gate')) {
+      cleanPath = '/models/dungeon/wall_gated.gltf';
+    } else if (cleanPath.includes('banner')) {
+      cleanPath = '/models/dungeon/banner_red.gltf';
+    } else if (cleanPath.includes('chest')) {
+      cleanPath = '/models/dungeon/chest.gltf';
+    }
+  }
+
+  const { scene } = useGLTF(cleanPath);
+  const clone = useMemo(() => {
+    const c = scene.clone(true);
+    c.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    return c;
+  }, [scene]);
+
+  const numScale = typeof scale === 'number' ? scale : 1.2;
+  return <primitive object={clone} scale={[numScale, numScale, numScale]} />;
+}
+
+// ----------------------------------------------------
+// Interactive Prop Component
+// ----------------------------------------------------
+function InteractiveProp({ item, isFocused, isOpened, onInteract }) {
   const role = item.logic?.role || 'none';
   const pos = item.position || [0, 0, 0];
   const rot = item.rotation || [0, 0, 0];
   const scale = item.scale || 1.2;
-  const numScale = typeof scale === 'number' ? scale : 1.2;
-
-  // Normalize model paths: handle .glb -> .gltf and known asset mappings
-  let cleanModelPath = item.modelPath || '/models/dungeon/chest.gltf';
-  if (cleanModelPath.endsWith('.glb')) {
-    cleanModelPath = cleanModelPath.replace('.glb', '.gltf');
-    if (cleanModelPath.includes('door-gate') || cleanModelPath.includes('door_gate')) {
-      cleanModelPath = '/models/dungeon/wall_gated.gltf';
-    } else if (cleanModelPath.includes('banner')) {
-      cleanModelPath = '/models/dungeon/banner_red.gltf';
-    } else if (cleanModelPath.includes('chest')) {
-      cleanModelPath = '/models/dungeon/chest.gltf';
-    }
-  }
 
   return (
     <group
@@ -146,37 +281,22 @@ function PlayerProp({ item, onInteract, isOpened }) {
         e.stopPropagation();
         onInteract(item);
       }}
-      onPointerOver={(e) => {
-        e.stopPropagation();
-        setHovered(true);
-        document.body.style.cursor = 'pointer';
-      }}
-      onPointerOut={() => {
-        setHovered(false);
-        document.body.style.cursor = 'default';
-      }}
     >
-      {/* 3D Model with Fallback Geometry */}
       <Suspense
         fallback={
-          <mesh position={[0, 0.4, 0]}>
+          <mesh position={[0, 0.5, 0]}>
             <boxGeometry args={[0.8, 0.8, 0.8]} />
-            <meshStandardMaterial color={role === 'exit_door' ? '#7f1d1d' : '#d97706'} roughness={0.7} />
+            <meshStandardMaterial color={role === 'exit_door' ? '#991b1b' : '#d97706'} roughness={0.7} />
           </mesh>
         }
       >
-        <DungeonModel
-          modelPath={cleanModelPath}
-          scale={numScale}
-          isSelected={false}
-          isHovered={hovered}
-        />
+        <SafeDungeonPropModel modelPath={item.modelPath} scale={scale} />
       </Suspense>
 
-      {/* Subtle Glowing Aura on Hover */}
-      {hovered && (
+      {/* Proximity Focus Ring on Floor when player looks at this prop */}
+      {isFocused && (
         <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.6, 0.8, 24]} />
+          <ringGeometry args={[0.7, 0.95, 32]} />
           <meshBasicMaterial
             color={
               role === 'exit_door'
@@ -184,25 +304,205 @@ function PlayerProp({ item, onInteract, isOpened }) {
                 : role === 'container'
                 ? '#f59e0b'
                 : role === 'clue'
-                ? '#0ea5e9'
-                : '#e2e8f0'
+                ? '#38bdf8'
+                : '#a855f7'
             }
             transparent
-            opacity={0.6}
+            opacity={0.8}
             side={THREE.DoubleSide}
           />
         </mesh>
       )}
 
-      {/* Green Diamond Marker above Opened / Looted Containers */}
+      {/* Green Diamond Marker above Opened Chests */}
       {isOpened && (
-        <mesh position={[0, 0.9, 0]}>
-          <octahedronGeometry args={[0.1]} />
+        <mesh position={[0, 1.1, 0]}>
+          <octahedronGeometry args={[0.12]} />
           <meshBasicMaterial color="#10b981" />
         </mesh>
       )}
     </group>
   );
+}
+
+// ----------------------------------------------------
+// First-Person 3D Character Controller (WASD + Mouse Look)
+// ----------------------------------------------------
+function FirstPersonController({
+  chambers,
+  placedItems,
+  onInteractWithFocused,
+  setFocusedItem,
+  isPaused
+}) {
+  const { camera, gl } = useThree();
+
+  // Player state: eye height = 1.6m
+  const yawRef = useRef(0);
+  const pitchRef = useRef(0);
+  const isPointerLockedRef = useRef(false);
+
+  // WASD Key States
+  const keysRef = useRef({
+    forward: false,
+    backward: false,
+    left: false,
+    right: false
+  });
+
+  // Calculate Dungeon Bounds for soft boundary clamping
+  const bounds = useMemo(() => {
+    let minX = Infinity,
+      maxX = -Infinity,
+      minZ = Infinity,
+      maxZ = -Infinity;
+    (chambers || []).forEach((c) => {
+      const halfW = (c.width || 6) / 2;
+      const halfD = (c.depth || c.length || 6) / 2;
+      minX = Math.min(minX, (c.x || 0) - halfW);
+      maxX = Math.max(maxX, (c.x || 0) + halfW);
+      minZ = Math.min(minZ, (c.z || 0) - halfD);
+      maxZ = Math.max(maxZ, (c.z || 0) + halfD);
+    });
+    return {
+      minX: minX === Infinity ? -3 : minX,
+      maxX: maxX === -Infinity ? 3 : maxX,
+      minZ: minZ === Infinity ? -3 : minZ,
+      maxZ: maxZ === -Infinity ? 3 : maxZ
+    };
+  }, [chambers]);
+
+  // Set initial position in the first room
+  useEffect(() => {
+    const first = chambers[0];
+    camera.position.set(first?.x || 0, 1.6, (first?.z || 0) + 1.2);
+    camera.rotation.set(0, 0, 0);
+  }, []);
+
+  // Keyboard & Mouse Listeners
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (isPaused) return;
+      const code = e.code;
+      if (code === 'KeyW' || code === 'ArrowUp') keysRef.current.forward = true;
+      if (code === 'KeyS' || code === 'ArrowDown') keysRef.current.backward = true;
+      if (code === 'KeyA' || code === 'ArrowLeft') keysRef.current.left = true;
+      if (code === 'KeyD' || code === 'ArrowRight') keysRef.current.right = true;
+      if (code === 'KeyE') {
+        onInteractWithFocused();
+      }
+    };
+
+    const handleKeyUp = (e) => {
+      const code = e.code;
+      if (code === 'KeyW' || code === 'ArrowUp') keysRef.current.forward = false;
+      if (code === 'KeyS' || code === 'ArrowDown') keysRef.current.backward = false;
+      if (code === 'KeyA' || code === 'ArrowLeft') keysRef.current.left = false;
+      if (code === 'KeyD' || code === 'ArrowRight') keysRef.current.right = false;
+    };
+
+    const handleMouseMove = (e) => {
+      if (!isPointerLockedRef.current || isPaused) return;
+      const sensitivity = 0.0022;
+      yawRef.current -= e.movementX * sensitivity;
+      pitchRef.current -= e.movementY * sensitivity;
+      // Clamp pitch (-70 deg to +70 deg)
+      pitchRef.current = Math.max(-1.25, Math.min(1.25, pitchRef.current));
+    };
+
+    const handleLockChange = () => {
+      isPointerLockedRef.current = document.pointerLockElement === gl.domElement;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('pointerlockchange', handleLockChange);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('pointerlockchange', handleLockChange);
+    };
+  }, [gl, isPaused, onInteractWithFocused]);
+
+  // Click Canvas to Lock Pointer
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const handleClick = () => {
+      if (!isPaused && document.pointerLockElement !== canvas) {
+        canvas.requestPointerLock?.();
+      }
+    };
+    canvas.addEventListener('click', handleClick);
+    return () => canvas.removeEventListener('click', handleClick);
+  }, [gl, isPaused]);
+
+  // Frame Loop: Smooth Movement & Interaction Raycast
+  useFrame((_, delta) => {
+    if (isPaused) return;
+
+    // 1. Update Camera Rotation from Yaw & Pitch
+    const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+    euler.x = pitchRef.current;
+    euler.y = yawRef.current;
+    camera.quaternion.setFromEuler(euler);
+
+    // 2. WASD Movement in Direction of Yaw
+    const speed = 4.8;
+    const moveX = (keysRef.current.right ? 1 : 0) - (keysRef.current.left ? 1 : 0);
+    const moveZ = (keysRef.current.backward ? 1 : 0) - (keysRef.current.forward ? 1 : 0);
+
+    if (moveX !== 0 || moveZ !== 0) {
+      const inputVector = new THREE.Vector3(moveX, 0, moveZ).normalize();
+      // Rotate by yaw
+      const moveEuler = new THREE.Euler(0, yawRef.current, 0);
+      inputVector.applyEuler(moveEuler);
+      inputVector.multiplyScalar(speed * delta);
+
+      const nextX = camera.position.x + inputVector.x;
+      const nextZ = camera.position.z + inputVector.z;
+
+      // Soft clamp inside dungeon boundary
+      const padding = 0.8;
+      camera.position.x = THREE.MathUtils.clamp(nextX, bounds.minX + padding, bounds.maxX - padding);
+      camera.position.z = THREE.MathUtils.clamp(nextZ, bounds.minZ + padding, bounds.maxZ - padding);
+    }
+
+    // Keep camera at fixed eye height 1.6m
+    camera.position.y = 1.6;
+
+    // 3. Find closest interactable prop in front of player
+    let closestItem = null;
+    let closestDist = 3.6; // Max reach distance (3.6 meters)
+
+    const camPos = new THREE.Vector3(camera.position.x, 0, camera.position.z);
+    const forwardDir = new THREE.Vector3();
+    camera.getWorldDirection(forwardDir);
+    forwardDir.y = 0;
+    forwardDir.normalize();
+
+    for (let i = 0; i < placedItems.length; i++) {
+      const item = placedItems[i];
+      const pos = item.position || [0, 0, 0];
+      const itemPos = new THREE.Vector3(pos[0], 0, pos[2]);
+      const dist = camPos.distanceTo(itemPos);
+
+      if (dist < closestDist) {
+        const toItem = itemPos.clone().sub(camPos).normalize();
+        const dot = forwardDir.dot(toItem);
+        if (dot > 0.45) { // Looking generally toward the prop
+          closestDist = dist;
+          closestItem = item;
+        }
+      }
+    }
+
+    setFocusedItem(closestItem);
+  });
+
+  return null;
 }
 
 // ----------------------------------------------------
@@ -222,6 +522,7 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
   const [activeClue, setActiveClue] = useState(null);
   const [toastMessage, setToastMessage] = useState(null);
   const [isEscaped, setIsEscaped] = useState(false);
+  const [focusedItem, setFocusedItem] = useState(null);
 
   // Timer State (Stopwatch)
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -250,39 +551,32 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
 
   // Handle Prop Interaction
   const handleInteract = (item) => {
-    if (isEscaped) return;
+    if (isEscaped || !item) return;
     const role = item.logic?.role || 'none';
 
-    // 1. Container / Hiding Spot
+    // 1. Container / Chest
     if (role === 'container') {
       if (openedContainers[item.id]) {
         showToast(`Already searched ${item.name || 'this chest'}. It is empty.`);
         return;
       }
-
       const hidden = item.logic?.containsItem || { type: 'key', name: 'Royal Dungeon Key' };
       setOpenedContainers((prev) => ({ ...prev, [item.id]: true }));
       setInventory((prev) => [...prev, { name: hidden.name, type: hidden.type }]);
-      try { audioSystem.playChime(); } catch(e) {}
+      try { audioSystem.playChime(); } catch (e) {}
       showToast(`🗝️ Found: ${hidden.name} inside ${item.name || 'chest'}!`);
       return;
     }
 
-    // 2. Secret Clue Note
+    // 2. Secret Clue Note / Wall Banner
     if (role === 'clue') {
-      try { audioSystem.playClick(); } catch(e) {}
+      try { audioSystem.playClick(); } catch (e) {}
+      document.exitPointerLock?.();
       setActiveClue(item.logic?.clueText || 'Search the gilded chest in the dark corner to claim your escape key.');
       return;
     }
 
-    // 3. Mechanism Switch
-    if (role === 'trigger') {
-      try { audioSystem.playClick(); } catch(e) {}
-      showToast('⚙️ A mechanism clicks deep within the stone walls...');
-      return;
-    }
-
-    // 4. Exit Door
+    // 3. Exit Portcullis Gate
     if (role === 'exit_door') {
       const requiredKey = item.logic?.requiredKey || 'Royal Dungeon Key';
       const hasKey = inventory.some(
@@ -290,34 +584,39 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
       );
 
       if (!hasKey) {
-        try { audioSystem.playThud(); } catch(e) {}
+        try { audioSystem.playThud(); } catch (e) {}
         showToast(`🔒 Exit Gate is locked! Requires: ${requiredKey}`);
       } else {
         // VICTORY ESCAPED!
-        try { audioSystem.playChime(); } catch(e) {}
+        try { audioSystem.playChime(); } catch (e) {}
+        document.exitPointerLock?.();
         setIsEscaped(true);
         try {
           const sec = (Date.now() - startTimeRef.current) / 1000;
           submitRoomRun(roomCode, 'Adventurer', sec);
-        } catch(e) {}
+        } catch (e) {}
       }
       return;
     }
 
-    // 5. Normal Decorative Prop
-    try { audioSystem.playClick(); } catch(e) {}
+    // 4. Other Prop
+    try { audioSystem.playClick(); } catch (e) {}
     showToast(`${item.name || 'Dungeon Prop'} - Ancient stone artifact.`);
   };
+
+  const isModalOpen = Boolean(activeClue || isEscaped);
 
   return (
     <EscapeErrorBoundary onExit={onExit}>
       <div className="fixed inset-0 w-screen h-screen overflow-hidden bg-stone-950 select-none z-50 font-sans text-stone-100">
-        
         {/* 1. TOP HUD */}
         <div className="absolute top-4 left-4 right-4 z-20 flex items-center justify-between pointer-events-auto">
           {/* Back Button */}
           <button
-            onClick={onExit}
+            onClick={() => {
+              document.exitPointerLock?.();
+              onExit();
+            }}
             className="bg-stone-900/90 hover:bg-stone-800 text-amber-300 hover:text-amber-100 px-4 py-2.5 rounded-2xl flex items-center gap-2 text-xs font-bold transition border border-amber-500/30 shadow-xl cursor-pointer active:scale-95"
           >
             <ArrowLeft className="w-4 h-4 text-amber-400" />
@@ -351,47 +650,89 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
           </div>
         )}
 
-        {/* 3. 3D ESCAPE ROOM CANVAS */}
+        {/* 3. FIRST PERSON CROSSHAIR & PROXIMITY INTERACTION BADGE */}
+        {!isModalOpen && (
+          <div className="absolute inset-0 pointer-events-none z-20 flex flex-col items-center justify-center">
+            {/* Center Reticle */}
+            <div
+              className={`w-3 h-3 rounded-full border-2 transition-all duration-150 ${
+                focusedItem
+                  ? 'border-amber-400 bg-amber-400/50 scale-150 shadow-[0_0_12px_rgba(245,158,11,0.8)]'
+                  : 'border-white/60 bg-white/20'
+              }`}
+            />
+
+            {/* In-Range Action Tooltip */}
+            {focusedItem && (
+              <div className="mt-4 px-4 py-1.5 rounded-full bg-slate-950/90 border border-amber-500/60 text-amber-200 text-xs font-bold shadow-2xl flex items-center gap-2 backdrop-blur-md animate-in zoom-in-95">
+                <span className="px-1.5 py-0.5 rounded bg-amber-500 text-stone-950 text-[10px] font-black uppercase">
+                  E
+                </span>
+                <span>
+                  {focusedItem.logic?.role === 'exit_door'
+                    ? 'Unlock Exit Gate'
+                    : focusedItem.logic?.role === 'container'
+                    ? `Search ${focusedItem.name || 'Chest'}`
+                    : focusedItem.logic?.role === 'clue'
+                    ? 'Read Ancient Clue'
+                    : `Inspect ${focusedItem.name || 'Prop'}`}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 4. CONTROLS HELPER BADGE */}
+        <div className="absolute top-20 left-4 z-20 pointer-events-none hidden sm:flex items-center gap-2 bg-slate-950/80 border border-slate-800/80 px-3 py-1.5 rounded-xl text-[11px] text-slate-300 backdrop-blur-sm">
+          <span className="font-mono font-bold text-amber-400">[W][A][S][D]</span> Walk
+          <span className="text-slate-600">·</span>
+          <span className="text-amber-400">Mouse</span> Look
+          <span className="text-slate-600">·</span>
+          <span className="font-mono font-bold text-amber-400">[E]</span> Interact
+        </div>
+
+        {/* 5. 3D FIRST PERSON ESCAPE ROOM CANVAS */}
         <Canvas
-          camera={{ position: [0, 9, 11], fov: 45, near: 0.1, far: 200 }}
+          camera={{ fov: 65, near: 0.1, far: 100 }}
           shadows
           gl={{ antialias: true }}
-          className="w-full h-full cursor-grab active:cursor-grabbing"
+          className="w-full h-full cursor-crosshair"
         >
-          <OrbitControls
-            makeDefault
-            enableDamping
-            dampingFactor={0.06}
-            minDistance={3}
-            maxDistance={40}
-            maxPolarAngle={Math.PI / 2 - 0.05}
-            target={[0, 0.5, 0]}
+          {/* Lighting Rig */}
+          <ambientLight intensity={0.45} />
+          <directionalLight position={[10, 20, 10]} intensity={0.8} castShadow />
+
+          {/* First Person WASD Movement & Mouse Look Controller */}
+          <FirstPersonController
+            chambers={chambers}
+            placedItems={placedItems}
+            onInteractWithFocused={() => handleInteract(focusedItem)}
+            setFocusedItem={setFocusedItem}
+            isPaused={isModalOpen}
           />
 
-          {/* Lighting */}
-          <ambientLight intensity={0.4} />
-          <directionalLight position={[8, 16, 8]} intensity={0.8} castShadow />
-
-          {/* Render Standalone Chambers */}
+          {/* Authentic Connected Modular Chambers (NO divider walls between connected rooms!) */}
           {chambers.map((ch, idx) => (
-            <PlayerChamber key={ch.id || idx} chamber={ch} />
+            <ConnectedDungeonChamber
+              key={ch.id || idx}
+              chamber={ch}
+              allChambers={chambers}
+            />
           ))}
 
-          {/* Contact Shadows */}
-          <ContactShadows position={[0, 0.001, 0]} opacity={0.6} scale={20} blur={2} far={4} color="#1c1917" />
-
-          {/* Render Interactive Props */}
+          {/* Placed Interactive 3D Props */}
           {placedItems.map((item) => (
-            <PlayerProp
+            <InteractiveProp
               key={item.id}
               item={item}
+              isFocused={focusedItem?.id === item.id}
               isOpened={!!openedContainers[item.id]}
               onInteract={handleInteract}
             />
           ))}
         </Canvas>
 
-        {/* 4. BOTTOM INVENTORY DOCK */}
+        {/* 6. BOTTOM INVENTORY DOCK */}
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 pointer-events-auto flex items-center gap-2 bg-stone-900/95 backdrop-blur-md px-4 py-2.5 rounded-3xl border-2 border-amber-500/30 shadow-2xl max-w-[90vw] overflow-x-auto">
           <span className="text-[10px] font-black uppercase tracking-wider text-amber-400/80 mr-1 flex items-center gap-1">
             <Key className="w-3.5 h-3.5 text-amber-400" />
@@ -400,7 +741,7 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
 
           {inventory.length === 0 ? (
             <span className="text-xs text-stone-500 italic px-2">
-              No keys collected yet. Search the room!
+              No keys collected yet. Explore the room!
             </span>
           ) : (
             inventory.map((inv, idx) => (
@@ -415,7 +756,7 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
           )}
         </div>
 
-        {/* 5. PARCHMENT CLUE MODAL */}
+        {/* 7. PARCHMENT CLUE MODAL */}
         {activeClue && (
           <div className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none">
             <div className="relative w-full max-w-sm bg-gradient-to-b from-[#fbf4e4] via-[#f5ebcf] to-[#ebdcb6] text-stone-900 border-4 border-[#8c6d37] rounded-3xl p-6 shadow-2xl text-center">
@@ -436,7 +777,7 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
               </p>
               <button
                 onClick={() => setActiveClue(null)}
-                className="px-6 py-2 bg-[#4a2e18] hover:bg-[#38210e] text-[#f7e8c6] rounded-xl font-bold text-xs uppercase tracking-wider transition"
+                className="px-6 py-2 bg-[#4a2e18] hover:bg-[#38210e] text-[#f7e8c6] rounded-xl font-bold text-xs uppercase tracking-wider transition cursor-pointer"
               >
                 Fold Parchment
               </button>
@@ -444,7 +785,7 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
           </div>
         )}
 
-        {/* 6. VICTORY MODAL: VAULT ESCAPED! */}
+        {/* 8. VICTORY MODAL: VAULT ESCAPED! */}
         {isEscaped && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md select-none animate-in zoom-in-95 duration-300">
             <div className="relative w-full max-w-md bg-gradient-to-b from-[#7a889b] via-[#637082] to-[#4e5a69] p-4 rounded-[36px] shadow-[0_25px_70px_rgba(0,0,0,0.9)] border-2 border-[#3d4652] text-center text-stone-900">
@@ -456,7 +797,7 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
                   VAULT ESCAPED!
                 </h2>
                 <p className="text-xs font-bold text-[#7d5b36] mt-1 mb-4">
-                  You cracked the puzzles and conquered the dungeon chamber.
+                  You conquered the dungeon chamber in first person!
                 </p>
                 <div className="p-4 bg-[#ebdcb4] rounded-2xl border-2 border-[#caa975] shadow-inner mb-5">
                   <span className="text-[10px] font-black uppercase tracking-widest text-[#8a6033] block mb-0.5">
@@ -473,14 +814,14 @@ export default function PlayerEscapeView({ room, onExit, onPlayAnother }) {
                   {onPlayAnother && (
                     <button
                       onClick={onPlayAnother}
-                      className="w-full py-3 rounded-2xl bg-gradient-to-b from-[#ffb834] via-[#f39200] to-[#c76800] hover:from-[#ffc44d] hover:to-[#d67300] text-[#3d1e00] font-black text-sm uppercase tracking-wider border-b-4 border-[#8f4700] shadow-lg transition active:translate-y-1"
+                      className="w-full py-3 rounded-2xl bg-gradient-to-b from-[#ffb834] via-[#f39200] to-[#c76800] hover:from-[#ffc44d] hover:to-[#d67300] text-[#3d1e00] font-black text-sm uppercase tracking-wider border-b-4 border-[#8f4700] shadow-lg transition active:translate-y-1 cursor-pointer"
                     >
                       Play Another Community Room
                     </button>
                   )}
                   <button
                     onClick={onExit}
-                    className="w-full py-2.5 rounded-2xl bg-[#4a2e18] hover:bg-[#38210e] text-[#f7e8c6] font-bold text-xs uppercase tracking-wider transition"
+                    className="w-full py-2.5 rounded-2xl bg-[#4a2e18] hover:bg-[#38210e] text-[#f7e8c6] font-bold text-xs uppercase tracking-wider transition cursor-pointer"
                   >
                     Return to Dashboard
                   </button>
