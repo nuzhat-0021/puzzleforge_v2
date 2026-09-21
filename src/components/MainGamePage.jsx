@@ -623,8 +623,8 @@ export default function MainGamePage() {
             <PlayerEscapeView
               room={playingRoom}
               onExit={() => setPlayingRoom(null)}
-              onPlayAnother={() => {
-                const next = getRandomCommunityRoom(playingRoom.room_code);
+              onPlayAnother={async () => {
+                const next = await getRandomCommunityRoom(playingRoom.room_code);
                 setPlayingRoom(next);
               }}
             />

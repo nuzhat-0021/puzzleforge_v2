@@ -125,6 +125,19 @@ function PlayerProp({ item, onInteract, isOpened }) {
   const scale = item.scale || 1.2;
   const numScale = typeof scale === 'number' ? scale : 1.2;
 
+  // Normalize model paths: handle .glb -> .gltf and known asset mappings
+  let cleanModelPath = item.modelPath || '/models/dungeon/chest.gltf';
+  if (cleanModelPath.endsWith('.glb')) {
+    cleanModelPath = cleanModelPath.replace('.glb', '.gltf');
+    if (cleanModelPath.includes('door-gate') || cleanModelPath.includes('door_gate')) {
+      cleanModelPath = '/models/dungeon/wall_gated.gltf';
+    } else if (cleanModelPath.includes('banner')) {
+      cleanModelPath = '/models/dungeon/banner_red.gltf';
+    } else if (cleanModelPath.includes('chest')) {
+      cleanModelPath = '/models/dungeon/chest.gltf';
+    }
+  }
+
   return (
     <group
       position={pos}
@@ -148,12 +161,12 @@ function PlayerProp({ item, onInteract, isOpened }) {
         fallback={
           <mesh position={[0, 0.4, 0]}>
             <boxGeometry args={[0.8, 0.8, 0.8]} />
-            <meshStandardMaterial color="#78716c" />
+            <meshStandardMaterial color={role === 'exit_door' ? '#7f1d1d' : '#d97706'} roughness={0.7} />
           </mesh>
         }
       >
         <DungeonModel
-          modelPath={item.modelPath}
+          modelPath={cleanModelPath}
           scale={numScale}
           isSelected={false}
           isHovered={hovered}

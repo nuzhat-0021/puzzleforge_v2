@@ -7,7 +7,7 @@ const STARTER_ROOM = {
   created_at: new Date().toISOString(),
   layout_json: {
     chambers: [
-      { id: 'grand_vault', label: 'Grand Vault', x: 0, z: 0, width: 5, length: 5, height: 3 }
+      { id: 'grand_vault', label: 'Grand Vault', x: 0, z: 0, width: 6, depth: 6, height: 3 }
     ],
     lightingMode: 'torchlight',
     placedItems: [
@@ -16,10 +16,10 @@ const STARTER_ROOM = {
         catalogId: 'door_gate',
         name: 'Iron Portcullis Exit',
         category: 'doors',
-        modelPath: '/models/dungeon/door-gate-bars.glb',
-        position: [0, 0, -2.4],
+        modelPath: '/models/dungeon/wall_gated.gltf',
+        position: [0, 0, -2.8],
         rotation: [0, 0, 0],
-        scale: [1, 1, 1],
+        scale: 1.2,
         logic: { role: 'exit_door', isLocked: true, requiredKey: 'Royal Dungeon Key' }
       },
       {
@@ -27,10 +27,10 @@ const STARTER_ROOM = {
         catalogId: 'chest',
         name: 'Gilded Royal Chest',
         category: 'props',
-        modelPath: '/models/dungeon/chest.glb',
+        modelPath: '/models/dungeon/chest.gltf',
         position: [-1.8, 0, 1.5],
         rotation: [0, Math.PI / 4, 0],
-        scale: [1, 1, 1],
+        scale: 1.2,
         logic: {
           role: 'container',
           containsItem: { type: 'key', name: 'Royal Dungeon Key' }
@@ -41,10 +41,10 @@ const STARTER_ROOM = {
         catalogId: 'banner',
         name: 'Ancient Wall Banner',
         category: 'decor',
-        modelPath: '/models/dungeon/wall-banner.glb',
-        position: [2.3, 1.2, 0],
+        modelPath: '/models/dungeon/banner_red.gltf',
+        position: [2.8, 1.2, 0],
         rotation: [0, -Math.PI / 2, 0],
-        scale: [1, 1, 1],
+        scale: 1.2,
         logic: {
           role: 'clue',
           clueText: 'Search the gilded chest in the dark corner to claim your escape key.'
@@ -62,20 +62,31 @@ const STARTER_ROOM = {
   }
 };
 
+// Fast timeout helper to guarantee the game opens in < 2.5s even if network is slow
+function withTimeout(promise, ms = 2500) {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Request timed out')), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+}
+
 /**
  * Publish room to Supabase Cloud & local storage
  */
 export async function publishRoomToCloud(roomRecord) {
   try {
-    const { data, error } = await supabase.from('rooms').insert([
-      {
-        room_code: roomRecord.room_code,
-        title: roomRecord.title || 'Dungeon Vault',
-        theme: roomRecord.theme || 'dungeon',
-        creator_name: 'Architect',
-        layout_json: roomRecord.layout_json
-      }
-    ]);
+    const { error } = await withTimeout(
+      supabase.from('rooms').insert([
+        {
+          room_code: roomRecord.room_code,
+          title: roomRecord.title || 'Dungeon Vault',
+          theme: roomRecord.theme || 'dungeon',
+          creator_name: 'Architect',
+          layout_json: roomRecord.layout_json
+        }
+      ])
+    );
     if (error) {
       console.warn('Supabase cloud publish error:', error.message);
     } else {
@@ -107,13 +118,15 @@ export async function getRoomByCode(code) {
     }
   } catch (e) {}
 
-  // 2. Query Supabase Cloud
+  // 2. Query Supabase Cloud with fast timeout
   try {
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .eq('room_code', cleanCode)
-      .maybeSingle();
+    const { data, error } = await withTimeout(
+      supabase
+        .from('rooms')
+        .select('*')
+        .eq('room_code', cleanCode)
+        .maybeSingle()
+    );
 
     if (data && !error) {
       return data;
@@ -127,13 +140,15 @@ export async function getRoomByCode(code) {
  * Fetch a random room from Supabase Cloud or local community pool
  */
 export async function getRandomCommunityRoom(excludeCode = null) {
-  // 1. Try fetching real community rooms from Supabase Cloud
+  // 1. Try fetching real community rooms from Supabase Cloud with fast timeout
   try {
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(30);
+    const { data, error } = await withTimeout(
+      supabase
+        .from('rooms')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(30)
+    );
 
     if (data && data.length > 0) {
       let pool = data;
@@ -169,13 +184,15 @@ export async function getRandomCommunityRoom(excludeCode = null) {
  */
 export async function submitRoomRun(roomCode, playerName, timeSeconds) {
   try {
-    const { error } = await supabase.from('room_runs').insert([
-      {
-        room_code: roomCode,
-        player_name: playerName || 'Adventurer',
-        time_seconds: parseFloat(timeSeconds.toFixed(2))
-      }
-    ]);
+    const { error } = await withTimeout(
+      supabase.from('room_runs').insert([
+        {
+          room_code: roomCode,
+          player_name: playerName || 'Adventurer',
+          time_seconds: parseFloat(timeSeconds.toFixed(2))
+        }
+      ])
+    );
     if (!error) {
       console.log('✅ Run posted to Supabase Leaderboard:', timeSeconds);
     }
@@ -189,11 +206,13 @@ export async function submitRoomRun(roomCode, playerName, timeSeconds) {
  */
 export async function getLeaderboardRuns(limit = 10) {
   try {
-    const { data, error } = await supabase
-      .from('room_runs')
-      .select('*')
-      .order('time_seconds', { ascending: true })
-      .limit(limit);
+    const { data, error } = await withTimeout(
+      supabase
+        .from('room_runs')
+        .select('*')
+        .order('time_seconds', { ascending: true })
+        .limit(limit)
+    );
 
     if (data && !error) {
       return data;
